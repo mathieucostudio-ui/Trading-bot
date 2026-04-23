@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(pip:*)",
+      "Bash(pip3:*)",
+      "Bash(pytest:*)",
+      "Bash(git status)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(git fetch*)",
+      "Bash(git checkout*)",
+      "Bash(git branch*)",
+      "Bash(find /home/user/Trading-bot*)",
+      "Bash(ls*)",
+      "Bash(cat*)",
+      "Read(/home/user/Trading-bot/**)"
+    ]
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "version": "0.1",
+  "configurations": [
+    {
+      "name": "Run strategy (paper trading)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": ["--mode", "paper", "--config", "config/default.yaml"],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    },
+    {
+      "name": "Run backtest — EUR/USD",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/backtest.py",
+      "args": ["--pair", "EURUSD", "--start", "2020-01-01", "--end", "2024-12-31"],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    },
+    {
+      "name": "Run backtest — all pairs",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/backtest.py",
+      "args": ["--pairs", "EURUSD,GBPUSD,USDJPY", "--start", "2020-01-01", "--end", "2024-12-31"],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    },
+    {
+      "name": "Run tests",
+      "type": "python",
+      "request": "launch",
+      "program": "-m",
+      "args": ["pytest", "tests/", "-v"],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    }
+  ]
+}
