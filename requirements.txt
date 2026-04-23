@@ -1,0 +1,12 @@
+pandas>=2.0
+numpy>=1.25
+smartmoneyconcepts>=0.0.27
+yfinance>=0.2
+vectorbt>=0.26
+pytz
+pyyaml
+python-dotenv
+
+# dev
+pytest>=7.0
+pytest-cov

@@ -1,0 +1,102 @@
+# Trading-bot — default configuration
+# All numeric thresholds live here. Never hardcode them in strategy code.
+
+# --- Pairs ---
+pairs:
+  - EURUSD
+  - GBPUSD
+  - USDJPY
+
+# yfinance ticker mapping (yfinance uses "=X" suffix for forex)
+ticker_map:
+  EURUSD: "EURUSD=X"
+  GBPUSD: "GBPUSD=X"
+  USDJPY: "USDJPY=X"
+
+# --- Timeframes ---
+timeframes:
+  ltf: "15m"   # entry timeframe — FVG, CHoCH, OB entry
+  mtf: "1h"    # structure timeframe — Order Blocks, Kill Zone filtering
+  htf: "4h"    # bias timeframe — BOS/CHoCH sequence, trend direction
+
+# Minimum candle counts required per timeframe before generating signals
+min_candles:
+  ltf: 200
+  mtf: 100
+  htf: 50
+
+# --- Sessions (all times in America/New_York / EST) ---
+sessions:
+  asian:
+    start: "19:00"
+    end: "22:00"
+    timezone: "America/New_York"
+    active_pairs: ["USDJPY"]
+
+  london:
+    start: "02:00"
+    end: "05:00"
+    timezone: "America/New_York"
+    active_pairs: ["EURUSD", "GBPUSD", "USDJPY"]
+
+  new_york:
+    start: "08:00"
+    end: "11:00"
+    timezone: "America/New_York"
+    active_pairs: ["EURUSD", "GBPUSD", "USDJPY"]
+
+  london_close:
+    start: "11:00"
+    end: "13:00"
+    timezone: "America/New_York"
+    active_pairs: ["EURUSD", "GBPUSD"]
+
+# --- Risk management ---
+risk:
+  max_risk_pct: 0.01          # 1% account risk per trade (hard cap)
+  min_rr_ratio: 2.0           # discard setups below this R:R
+  max_concurrent_trades: 3    # across all pairs
+  max_trades_per_pair: 1      # never stack on the same pair
+  daily_loss_limit_pct: 0.03  # halt trading after -3% account in a day
+
+  # Spread filter — skip entry if spread exceeds threshold (in pips)
+  max_spread_pips:
+    EURUSD: 2.0
+    GBPUSD: 3.0
+    USDJPY: 2.0
+
+  # News filter — no new entries within this many minutes of high-impact news
+  news_blackout_minutes: 15
+
+# --- ICT/SMC detector parameters ---
+detectors:
+  # Swing point detection
+  swing_lookback: 5           # bars each side to confirm a swing high/low
+
+  # Displacement (impulse candle) filter
+  displacement_body_ratio: 0.6    # body / full_range minimum
+  displacement_lookback: 20       # bars to compute average body size
+  displacement_body_multiplier: 1.5  # displacement body must be > multiplier * avg_body
+
+  # Fair Value Gap
+  fvg_body_ratio: 0.5         # middle candle body/range minimum
+  fvg_min_gap_pips:           # minimum gap size per pair (filters micro-gaps)
+    EURUSD: 3.0
+    GBPUSD: 4.0
+    USDJPY: 3.0
+
+  # Order Block
+  ob_close_mitigation: false  # true = require candle close inside OB to mitigate
+
+  # Liquidity pools
+  liquidity_range_pct: 0.001  # 0.1% price range to cluster equal highs/lows
+
+  # Confluence scoring — minimum score to qualify as a valid setup (max = 5)
+  min_confluence_score: 3
+
+# --- Backtesting ---
+backtest:
+  default_start: "2020-01-01"
+  default_end: "2024-12-31"
+  initial_capital: 10000.0    # USD
+  commission_pct: 0.0001      # 0.01% per trade (approximate spread cost)
