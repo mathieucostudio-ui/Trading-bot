@@ -2,8 +2,14 @@
 Entry point — backtesting mode.
 
 Usage:
-    python src/backtest.py --pair EURUSD --start 2020-01-01 --end 2024-12-31
-    python src/backtest.py --pairs EURUSD,GBPUSD,USDJPY --start 2020-01-01 --end 2024-12-31
+    python src/backtest.py --pair EURUSD --start 2024-06-01
+    python src/backtest.py --pair EURUSD --ltf 1h --start 2024-06-01
+    python src/backtest.py --pairs EURUSD,GBPUSD,USDJPY --ltf 1h --start 2024-06-01
+
+Note sur yfinance :
+    15m : 60 derniers jours max    →  utilise --ltf 15m avec --start récent
+    1h  : 730 derniers jours max   →  recommandé pour backtest plus long
+    1d  : historique complet       →  pour une vue long terme
 """
 
 from __future__ import annotations
@@ -34,7 +40,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--pair", help="Single pair, e.g. EURUSD")
     parser.add_argument("--pairs", help="Comma-separated pairs, e.g. EURUSD,GBPUSD,USDJPY")
     parser.add_argument("--start", help="Start date YYYY-MM-DD")
-    parser.add_argument("--end", help="End date YYYY-MM-DD")
+    parser.add_argument("--end",   help="End date YYYY-MM-DD (défaut: aujourd'hui)")
+    parser.add_argument("--ltf",   help="Override timeframe LTF ex: 15m, 1h, 1d (défaut: config)")
+    parser.add_argument("--is-months",  type=int, default=6,  help="Fenêtre IS walk-forward (mois)")
+    parser.add_argument("--oos-months", type=int, default=2,  help="Fenêtre OOS walk-forward (mois)")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -50,53 +59,32 @@ def main(argv: list[str] | None = None) -> None:
     start = args.start or bt_cfg.get("default_start")
     end = args.end or bt_cfg.get("default_end")
 
-    logger.info("Backtest | pairs=%s | %s → %s", pairs, start, end)
+    ltf = args.ltf or cfg["timeframes"]["ltf"]
+    logger.info("Backtest | pairs=%s | ltf=%s | %s → %s", pairs, ltf, start, end)
 
-    # Phase 4 will wire the full backtest engine here.
-    # For now, verify multi-timeframe data loads cleanly for each pair.
     from data.fetcher import fetch_ohlcv
-    from data.timeframes import build_mtf
-
-    tfs = [cfg["timeframes"]["ltf"], cfg["timeframes"]["mtf"], cfg["timeframes"]["htf"]]
-
-    for pair in pairs:
-        try:
-            base = fetch_ohlcv(pair, cfg["timeframes"]["ltf"], start=start, end=end)
-            mtf = build_mtf(base, tfs)
-            for tf, df in mtf.items():
-                logger.info(
-                    "  %s %s → %d candles  (%s → %s)",
-                    pair, tf, len(df),
-                    df.index[0].date(), df.index[-1].date(),
-                )
-        except Exception as exc:
-            logger.error("Failed to load data for %s: %s", pair, exc)
-            sys.exit(1)
-
-    from backtest.engine  import BacktestConfig, run_backtest
-    from backtest.metrics import compute_metrics
+    from backtest.engine   import BacktestConfig, run_backtest
+    from backtest.metrics  import compute_metrics
     from backtest.walkforward import walk_forward
 
-    bt_cfg = BacktestConfig(
-        initial_balance=bt_cfg.get("initial_balance", 10_000.0),
+    yaml_bt  = cfg.get("backtest", {})
+    engine_cfg = BacktestConfig(
+        initial_balance=yaml_bt.get("initial_capital", 10_000.0),
         max_concurrent=cfg["risk"].get("max_concurrent_trades", 3),
         structure_lookback=cfg["detectors"].get("swing_lookback", 5),
         fvg_body_ratio=cfg["detectors"].get("fvg_body_ratio", 0.5),
-        min_confluence_score=bt_cfg.get("min_confluence_score", 3),
-        require_kill_zone=bt_cfg.get("require_kill_zone", True),
-        require_amd_phase3=bt_cfg.get("require_amd_phase3", True),
+        min_confluence_score=cfg["detectors"].get("min_confluence_score", 3),
+        require_kill_zone=yaml_bt.get("require_kill_zone", True),
+        require_amd_phase3=yaml_bt.get("require_amd_phase3", True),
         risk_pct=cfg["risk"].get("max_risk_pct", 0.01),
         rr_ratio=cfg["risk"].get("min_rr_ratio", 2.0),
     )
 
-    wf_months_is  = bt_cfg.__dict__.get("wf_is_months",  6)
-    wf_months_oos = bt_cfg.__dict__.get("wf_oos_months", 2)
-
     for pair in pairs:
         logger.info("=" * 60)
-        logger.info("Backtesting %s  %s → %s", pair, start, end)
+        logger.info("Backtesting %s  %s → %s  [%s]", pair, start, end, ltf)
         try:
-            base = fetch_ohlcv(pair, cfg["timeframes"]["ltf"], start=start, end=end)
+            base = fetch_ohlcv(pair, ltf, start=start, end=end)
         except Exception as exc:
             logger.error("Chargement des données échoué pour %s: %s", pair, exc)
             sys.exit(1)
@@ -104,17 +92,23 @@ def main(argv: list[str] | None = None) -> None:
         logger.info("  %d barres chargées (%s → %s)",
                     len(base), base.index[0].date(), base.index[-1].date())
 
-        wf_result = walk_forward(base, is_months=wf_months_is,
-                                 oos_months=wf_months_oos, config=bt_cfg)
+        wf_result = walk_forward(
+            base,
+            is_months=args.is_months,
+            oos_months=args.oos_months,
+            config=engine_cfg,
+        )
 
         if wf_result.windows:
-            logger.info(wf_result.summary())
+            logger.info("\n" + wf_result.summary())
         else:
-            # Série trop courte pour le walk-forward → backtest simple
-            result  = run_backtest(base, bt_cfg)
-            metrics = compute_metrics(result.trades,
-                                      initial_balance=bt_cfg.initial_balance,
-                                      equity_curve=result.equity_curve)
+            logger.info("  Données insuffisantes pour walk-forward → backtest simple")
+            result  = run_backtest(base, engine_cfg)
+            metrics = compute_metrics(
+                result.trades,
+                initial_balance=engine_cfg.initial_balance,
+                equity_curve=result.equity_curve,
+            )
             logger.info("\n%s", metrics)
 
 
