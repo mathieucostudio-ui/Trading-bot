@@ -2,10 +2,10 @@
 # All numeric thresholds live here. Never hardcode them in strategy code.
 
 # --- Pairs ---
+# USDJPY retiré : edge non robuste hors périodes d'intervention BOJ (validé backtest 2024-2026)
 pairs:
   - EURUSD
   - GBPUSD
-  - USDJPY
 
 # yfinance ticker mapping (yfinance uses "=X" suffix for forex)
 ticker_map:
@@ -37,13 +37,13 @@ sessions:
     start: "02:00"
     end: "05:00"
     timezone: "America/New_York"
-    active_pairs: ["EURUSD", "GBPUSD", "USDJPY"]
+    active_pairs: ["EURUSD", "GBPUSD"]
 
   new_york:
     start: "08:00"
     end: "11:00"
     timezone: "America/New_York"
-    active_pairs: ["EURUSD", "GBPUSD", "USDJPY"]
+    active_pairs: ["EURUSD", "GBPUSD"]
 
   london_close:
     start: "11:00"
@@ -92,11 +92,11 @@ detectors:
   liquidity_range_pct: 0.001  # 0.1% price range to cluster equal highs/lows
 
   # Confluence scoring — minimum score to qualify as a valid setup (max = 5)
-  min_confluence_score: 3
+  # Score 4 validé par walk-forward OOS : WR moyen 67% vs 57% à score 3
+  min_confluence_score: 4
 
 # --- Backtesting ---
 backtest:
-  default_start: "2020-01-01"
-  default_end: "2024-12-31"
+  default_start: "2024-05-01"
   initial_capital: 10000.0    # USD
   commission_pct: 0.0001      # 0.01% per trade (approximate spread cost)
