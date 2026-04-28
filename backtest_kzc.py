@@ -10,7 +10,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-INITIAL_BALANCE = 1000.0
+INITIAL_BALANCE = 100.0
 RISK_PCT        = 0.01
 TP1_R           = 1.5
 TP2_R           = 2.5
@@ -403,53 +403,119 @@ def main():
     trades_x, bal_x = simulate('XAUUSD', xm15, xh1, xh4)
     results['XAUUSD'] = metrics(trades_x, INITIAL_BALANCE, bal_x)
 
-    # Save to JSON (without trade objects)
+    # Save to JSON
     save = {}
     for pair, m in results.items():
         if m is None: continue
         save[pair] = {k: v for k, v in m.items() if k != 'trades'}
-
-    with open('/home/user/Trading-bot/kzc_results.json', 'w') as f:
+    with open('/home/user/Trading-bot/kzc_results_100.json', 'w') as f:
         json.dump(save, f, indent=2, default=str)
-    print('\nResults saved to kzc_results.json')
 
-    # Print summary
-    print('\n' + '='*65)
-    print('  KZC STRATEGY BACKTEST — RÉSULTATS')
-    print('='*65)
-    for pair, m in results.items():
-        if not m:
-            print(f'{pair}: aucun trade')
-            continue
-        print(f'\n  {pair}')
-        print(f'  {"─"*40}')
-        print(f'  Trades        : {m["n"]}')
-        print(f'  Win Rate      : {m["wr"]:.1f}%')
-        print(f'  Moy. gain     : +{m["avg_win"]:.2f}R')
-        print(f'  Moy. perte    : -{m["avg_loss"]:.2f}R')
-        print(f'  Profit Factor : {m["pf"]:.2f}')
-        print(f'  Total R       : {m["total_r"]:+.1f}R')
-        print(f'  ROI           : {m["roi"]:+.1f}%')
-        print(f'  PnL net       : ${m["net_pnl"]:+.2f}')
-        print(f'  Max Drawdown  : {m["max_dd_pct"]:.1f}% (${m["max_dd_usd"]:.2f})')
-        print(f'  Sharpe        : {m["sharpe"]:.2f}')
-        print(f'  Sortino       : {m["sortino"]:.2f}')
-        print(f'  Balance finale: ${m["final"]:.2f}')
-        print(f'  Sorties       : {m["reasons"]}')
-
-    # Portfolio total
+    # ── Collect all trades ────────────────────────────────────────────────────
     all_trades = []
     for m in results.values():
         if m: all_trades.extend(m['trades'])
-    if all_trades:
-        tot_r = sum(t.r_multiple for t in all_trades)
-        tot_w = sum(1 for t in all_trades if t.r_multiple > 0)
-        print(f'\n  {"─"*40}')
-        print(f'  PORTEFEUILLE TOTAL')
-        print(f'  Trades totaux : {len(all_trades)}')
-        print(f'  Win Rate tot. : {tot_w/len(all_trades)*100:.1f}%')
-        print(f'  R total       : {tot_r:+.1f}R')
-        print('='*65)
+    all_trades.sort(key=lambda t: t.entry_time)
+
+    # ── Monthly breakdown (all pairs combined) ────────────────────────────────
+    monthly_data = {}
+    for t in all_trades:
+        k = t.entry_time.strftime('%Y-%m')
+        if k not in monthly_data: monthly_data[k] = {'trades': 0, 'wins': 0, 'r': 0.0}
+        monthly_data[k]['trades'] += 1
+        monthly_data[k]['wins']   += 1 if t.r_multiple > 0 else 0
+        monthly_data[k]['r']      += t.r_multiple
+
+    # Monthly PnL in $ (using 1% of $100 = $1/R at start, but compounded)
+    # Recompute with actual compounded balance per month
+    monthly_pnl = {}
+    running = INITIAL_BALANCE
+    for t in all_trades:
+        k = t.entry_time.strftime('%Y-%m')
+        if k not in monthly_pnl: monthly_pnl[k] = 0.0
+        monthly_pnl[k] += t.pnl
+
+    # ── PRINT RESULTS ─────────────────────────────────────────────────────────
+    print('\n' + '='*65)
+    print(f'  KZC BACKTEST — Capital $100 | Risque 1%/trade')
+    print(f'  Breakeven activé : OUI (SL → entrée après TP1)')
+    print('='*65)
+
+    for pair, m in results.items():
+        if not m:
+            print(f'\n  {pair}: aucun trade généré')
+            continue
+        n_months = len(set(t.entry_time.strftime('%Y-%m') for t in m['trades']))
+        avg_monthly_r   = m['total_r'] / max(n_months, 1)
+        avg_monthly_pnl = m['net_pnl'] / max(n_months, 1)
+        print(f'\n  ── {pair} ──')
+        print(f'  Trades          : {m["n"]} ({m["n"]//max(n_months,1):.0f}/mois)')
+        print(f'  Win Rate        : {m["wr"]:.1f}%')
+        print(f'  Profit Factor   : {m["pf"]:.2f}')
+        print(f'  Total R         : {m["total_r"]:+.1f}R  ({avg_monthly_r:+.1f}R/mois)')
+        print(f'  ROI             : {m["roi"]:+.1f}%')
+        print(f'  PnL net         : ${m["net_pnl"]:+.2f}  (~${avg_monthly_pnl:+.2f}/mois)')
+        print(f'  Balance finale  : ${m["final"]:.2f}')
+        print(f'  Max Drawdown    : {m["max_dd_pct"]:.1f}% (${m["max_dd_usd"]:.2f})')
+        print(f'  Sharpe / Sortino: {m["sharpe"]:.2f} / {m["sortino"]:.2f}')
+        print(f'  Sorties BE      : {m["reasons"].get("sl_be", 0)} trades sauvés par breakeven')
+
+    # ── Portfolio mensuel ──────────────────────────────────────────────────────
+    print(f'\n{"="*65}')
+    print('  DÉCOMPOSITION MENSUELLE — PORTEFEUILLE COMPLET')
+    print(f'  {"Mois":<10} {"Trades":>7} {"WR":>7} {"R":>8} {"PnL $":>10} {"Cumul $":>10}')
+    print(f'  {"─"*58}')
+    cumul = INITIAL_BALANCE
+    monthly_rs = []
+    for k in sorted(monthly_data.keys()):
+        d = monthly_data[k]
+        wr = d['wins'] / d['trades'] * 100 if d['trades'] else 0
+        pnl = monthly_pnl.get(k, 0)
+        cumul += pnl
+        monthly_rs.append(d['r'])
+        flag = '✅' if pnl >= 0 else '❌'
+        print(f'  {k:<10} {d["trades"]:>7} {wr:>6.0f}% {d["r"]:>+8.1f}R {pnl:>+9.2f}$ {cumul:>9.2f}$ {flag}')
+
+    avg_r   = np.mean(monthly_rs)
+    pos_m   = sum(1 for r in monthly_rs if r > 0)
+    neg_m   = sum(1 for r in monthly_rs if r <= 0)
+    best_m  = max(monthly_rs)
+    worst_m = min(monthly_rs)
+
+    print(f'\n  Mois gagnants   : {pos_m} / {len(monthly_rs)}')
+    print(f'  Mois perdants   : {neg_m} / {len(monthly_rs)}')
+    print(f'  Meilleur mois   : +{best_m:.1f}R')
+    print(f'  Pire mois       : {worst_m:.1f}R')
+    print(f'  Moy. R/mois     : {avg_r:+.1f}R')
+
+    # ── Objectif $250/mois ─────────────────────────────────────────────────────
+    print(f'\n{"="*65}')
+    print('  ANALYSE : OBJECTIF $250/MOIS')
+    print(f'{"="*65}')
+    avg_monthly_pnl_total = sum(monthly_pnl.values()) / max(len(monthly_pnl), 1)
+    print(f'\n  Avec $100 et 1% risque :')
+    print(f'  → Gain moyen réel/mois  : ${avg_monthly_pnl_total:+.2f}')
+    print(f'  → Pour atteindre $250/mois avec cette stratégie :')
+
+    for risk in [0.01, 0.02, 0.05, 0.10, 0.15, 0.20]:
+        factor = risk / 0.01
+        proj   = avg_monthly_pnl_total * factor
+        note   = ''
+        if risk <= 0.02: note = '✅ Sûr'
+        elif risk <= 0.05: note = '⚠️  Risqué'
+        else: note = '❌ Dangereux'
+        print(f'  Risque {risk*100:.0f}%/trade → ~${proj:+.2f}/mois  {note}')
+
+    # Capital minimum nécessaire pour $250/mois à 1-2% risque
+    cap_1pct = 250 / (avg_r * 0.01) if avg_r > 0 else float('inf')
+    cap_2pct = 250 / (avg_r * 0.02) if avg_r > 0 else float('inf')
+    print(f'\n  Capital minimum pour $250/mois en toute sécurité :')
+    print(f'  → À 1% risque/trade : ${cap_1pct:,.0f}')
+    print(f'  → À 2% risque/trade : ${cap_2pct:,.0f}')
+    print(f'\n  ⚠️  Avec $100, la stratégie rapporte ~${avg_monthly_pnl_total:.2f}/mois.')
+    print(f'  Pour $250/mois il faut soit augmenter le capital,')
+    print(f'  soit accepter un risque élevé (compte grillé probable).')
+    print('='*65)
 
 if __name__ == '__main__':
     main()
