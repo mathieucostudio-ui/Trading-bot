@@ -217,44 +217,41 @@ void ManagePositions()
 
     for(int i = g_state_count - 1; i >= 0; i--)
     {
-        TradeState &s = g_states[i];
-
-        if(!PositionSelectByTicket(s.ticket)) {
+        if(!PositionSelectByTicket(g_states[i].ticket)) {
             RemoveState(i);
             continue;
         }
 
-        double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-        double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-        double price = (s.direction == 1) ? bid : ask;
+        double bid   = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        double ask   = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
         // ── Fermeture forcée fin de journée ──────────────────────
         if(hard_close) {
-            if(g_trade.PositionClose(s.ticket, InpSlippage))
-                Print("⏰ Hard close | ticket:", s.ticket, " | heure:", dt.hour, "h");
+            if(g_trade.PositionClose(g_states[i].ticket, InpSlippage))
+                Print("⏰ Hard close | ticket:", g_states[i].ticket, " | heure:", dt.hour, "h");
             RemoveState(i);
             continue;
         }
 
         // ── Gestion TP1 → ferme 50% + breakeven ──────────────────
-        if(!s.tp1_hit) {
-            bool tp1_reached = (s.direction == 1) ? (bid >= s.tp1) : (ask <= s.tp1);
-
+        if(!g_states[i].tp1_hit) {
+            bool tp1_reached = (g_states[i].direction == 1) ? (bid >= g_states[i].tp1)
+                                                             : (ask <= g_states[i].tp1);
             if(tp1_reached) {
-                double vol = PositionGetDouble(POSITION_VOLUME);
+                double vol       = PositionGetDouble(POSITION_VOLUME);
                 double close_vol = NormalizeVolume(vol / 2.0);
 
-                if(close_vol > 0 && g_trade.PositionClosePartial(s.ticket, close_vol)) {
-                    s.tp1_hit = true;
-                    Print("🎯 TP1 atteint | 50% fermé @ ", s.tp1,
-                          " | ticket:", s.ticket);
+                if(close_vol > 0 && g_trade.PositionClosePartial(g_states[i].ticket, close_vol)) {
+                    g_states[i].tp1_hit = true;
+                    Print("🎯 TP1 atteint | 50% fermé @ ", g_states[i].tp1,
+                          " | ticket:", g_states[i].ticket);
 
                     // Breakeven : SL → prix d'entrée
-                    if(InpBreakeven && PositionSelectByTicket(s.ticket)) {
-                        double be_sl = NormalizeDouble(s.entry, _Digits);
-                        if(g_trade.PositionModify(s.ticket, be_sl, s.tp2)) {
-                            s.be_active = true;
-                            s.sl_original = be_sl;
+                    if(InpBreakeven && PositionSelectByTicket(g_states[i].ticket)) {
+                        double be_sl = NormalizeDouble(g_states[i].entry, _Digits);
+                        if(g_trade.PositionModify(g_states[i].ticket, be_sl, g_states[i].tp2)) {
+                            g_states[i].be_active   = true;
+                            g_states[i].sl_original = be_sl;
                             Print("🔒 Breakeven activé | SL → ", be_sl);
                         }
                     }
@@ -497,17 +494,17 @@ void AddState(ulong ticket, int dir, double entry, double sl,
               double sl_dist, double tp1, double tp2)
 {
     if(g_state_count >= 20) return;
-    TradeState &s = g_states[g_state_count];
-    s.ticket      = ticket;
-    s.direction   = dir;
-    s.entry       = entry;
-    s.sl_original = sl;
-    s.sl_dist     = sl_dist;
-    s.tp1         = tp1;
-    s.tp2         = tp2;
-    s.tp1_hit     = false;
-    s.be_active   = false;
-    s.open_time   = TimeCurrent();
+    int idx = g_state_count;
+    g_states[idx].ticket      = ticket;
+    g_states[idx].direction   = dir;
+    g_states[idx].entry       = entry;
+    g_states[idx].sl_original = sl;
+    g_states[idx].sl_dist     = sl_dist;
+    g_states[idx].tp1         = tp1;
+    g_states[idx].tp2         = tp2;
+    g_states[idx].tp1_hit     = false;
+    g_states[idx].be_active   = false;
+    g_states[idx].open_time   = TimeCurrent();
     g_state_count++;
 }
 
