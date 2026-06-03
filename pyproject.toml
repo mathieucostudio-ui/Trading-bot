@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "trading-bot"
+version = "0.1.0"
+description = "ICT/SMC Forex trading bot — EUR/USD, GBP/USD, USD/JPY"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.25",
+    "smartmoneyconcepts>=0.0.27",
+    "yfinance>=0.2",
+    "vectorbt>=0.26",
+    "pytz",
+    "pyyaml",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

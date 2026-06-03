@@ -1,0 +1,543 @@
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║   STRATÉGIE CRYPTO FUTURES — BREAKOUT CONSOLIDATION                     ║
+// ║   Paires : SOL, XRP, BNB, DOGE, ETH, AVAX, LINK, ADA, SUI, TRX...     ║
+// ║   Timeframes recommandés : M5 / M10 / M15                               ║
+// ║   Version : 1.0 — Pine Script v5                                         ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+//@version=5
+strategy("Crypto Futures — Breakout Consolidation",
+         shorttitle        = "BCF",
+         overlay           = true,
+         default_qty_type  = strategy.percent_of_equity,
+         default_qty_value = 100,
+         initial_capital   = 5000,
+         commission_type   = strategy.commission.percent,
+         commission_value  = 0.05,
+         slippage          = 2,
+         calc_on_every_tick = false)
+
+// ══════════════════════════════════════════════════
+// ▌ INPUTS
+// ══════════════════════════════════════════════════
+grpMM    = "💰 Money Management"
+grpFig   = "📐 Détection Figures"
+grpVisu  = "🎨 Affichage"
+grpFilter= "🔍 Filtres"
+
+i_riskPct     = input.float(1.0,  "Risque par trade (%)",         minval=0.1, maxval=5.0,  step=0.1,  group=grpMM)
+i_minRR       = input.float(3.0,  "Ratio R:R minimum",             minval=1.0, maxval=10.0, step=0.5,  group=grpMM)
+i_beAt2R      = input.bool (true, "Break Even à 2R (obligatoire)", group=grpMM)
+i_leverage    = input.int  (10,   "Levier (isolé)",                minval=1,   maxval=125,              group=grpMM)
+
+i_swingLen    = input.int  (5,    "Longueur pivot (barres)",        minval=2,   maxval=15,               group=grpFig)
+i_lookback    = input.int  (60,   "Lookback figures (barres)",      minval=20,  maxval=300,              group=grpFig)
+i_minTouches  = input.int  (2,    "Touches min. par côté (range)",  minval=2,   maxval=5,                group=grpFig)
+i_tolPct      = input.float(0.4,  "Tolérance clustering (%)",       minval=0.1, maxval=2.0,  step=0.05, group=grpFig)
+i_breakBuffer = input.float(0.15, "Buffer cassure franche (%)",     minval=0.05,maxval=1.0,  step=0.05, group=grpFig)
+
+i_showSwings  = input.bool (true, "Swing highs / lows",  group=grpVisu)
+i_showZones   = input.bool (true, "Zones figures",        group=grpVisu)
+i_showSLTP    = input.bool (true, "Niveaux SL / 2R / 3R", group=grpVisu)
+i_showLabels  = input.bool (true, "Labels de signal",     group=grpVisu)
+i_showDash    = input.bool (true, "Tableau de bord",      group=grpVisu)
+
+i_vol24Filter = input.float(3.0,  "Variation 24h minimum (%)",      minval=0.0, maxval=20.0, step=0.5,  group=grpFilter)
+i_volFilter   = input.bool (false, "Activer filtre variation 24h",   group=grpFilter)
+
+// ══════════════════════════════════════════════════
+// ▌ SWING POINTS (pivot highs / lows confirmés)
+// ══════════════════════════════════════════════════
+swHigh = ta.pivothigh(high, i_swingLen, i_swingLen)
+swLow  = ta.pivotlow (low,  i_swingLen, i_swingLen)
+
+// Affichage des swings
+plotshape(i_showSwings and not na(swHigh), "Swing High", shape.triangledown,
+          location.abovebar, color.new(color.red, 30), size=size.tiny)
+plotshape(i_showSwings and not na(swLow),  "Swing Low",  shape.triangleup,
+          location.belowbar, color.new(color.teal, 30), size=size.tiny)
+
+// ══════════════════════════════════════════════════
+// ▌ HISTORIQUE DES SWING POINTS (buffers glissants)
+// ══════════════════════════════════════════════════
+var float[] arrSH = array.new_float(0)
+var float[] arrSL = array.new_float(0)
+var int[]   arrSHbar = array.new_int(0)
+var int[]   arrSLbar = array.new_int(0)
+
+MAX_SW = 30
+
+if not na(swHigh)
+    array.push(arrSH, swHigh)
+    array.push(arrSHbar, bar_index - i_swingLen)
+    if array.size(arrSH) > MAX_SW
+        array.shift(arrSH)
+        array.shift(arrSHbar)
+
+if not na(swLow)
+    array.push(arrSL, swLow)
+    array.push(arrSLbar, bar_index - i_swingLen)
+    if array.size(arrSL) > MAX_SW
+        array.shift(arrSL)
+        array.shift(arrSLbar)
+
+// ══════════════════════════════════════════════════
+// ▌ FIGURE 1 : RANGE SYMÉTRIQUE
+//   ≥ 2 swing highs groupés + ≥ 2 swing lows groupés
+//   → long ET short possibles
+// ══════════════════════════════════════════════════
+detectSymRange() =>
+    bool  det  = false
+    float rH   = na
+    float rL   = na
+    int   barH = na
+    int   barL = na
+
+    szH = array.size(arrSH)
+    szL = array.size(arrSL)
+
+    if szH >= i_minTouches and szL >= i_minTouches
+        // Clustering des highs : moyenne + dispersion
+        avgH = array.avg(arrSH)
+        maxH = array.max(arrSH)
+        minH = array.min(arrSH)
+        spreadH = (maxH - minH) / avgH * 100
+
+        avgL = array.avg(arrSL)
+        maxL = array.max(arrSL)
+        minL = array.min(arrSL)
+        spreadL = (maxL - minL) / avgL * 100
+
+        // Compter touches dans la tolérance
+        touchH = 0
+        for i = 0 to szH - 1
+            v = array.get(arrSH, i)
+            if math.abs(v - avgH) / avgH * 100 < i_tolPct
+                touchH += 1
+
+        touchL = 0
+        for i = 0 to szL - 1
+            v = array.get(arrSL, i)
+            if math.abs(v - avgL) / avgL * 100 < i_tolPct
+                touchL += 1
+
+        if touchH >= i_minTouches and touchL >= i_minTouches and avgH > avgL
+            det  := true
+            rH   := avgH
+            rL   := avgL
+
+    [det, rH, rL]
+
+[symDet, symH, symL] = detectSymRange()
+
+// ══════════════════════════════════════════════════
+// ▌ FIGURE 2 : CANAL BAISSIER (achat uniquement)
+//   2 swing highs décroissants + 2 swing lows décroissants
+//   → achat seulement lors du breakout haussier
+// ══════════════════════════════════════════════════
+detectBearishChannel() =>
+    bool  det    = false
+    float chResist = na  // ligne résistance (cassure = entrée long)
+    float chSupp   = na
+
+    szH = array.size(arrSH)
+    szL = array.size(arrSL)
+
+    if szH >= 2 and szL >= 2
+        h_last  = array.get(arrSH, szH - 1)
+        h_prev  = array.get(arrSH, szH - 2)
+        l_last  = array.get(arrSL, szL - 1)
+        l_prev  = array.get(arrSL, szL - 2)
+
+        descHighs = h_last < h_prev
+        descLows  = l_last < l_prev
+
+        // Vérifier que les baisses sont parallèles (slopes similaires)
+        slopeH = h_last - h_prev
+        slopeL = l_last - l_prev
+        parallel = math.abs(slopeH - slopeL) / math.abs(slopeH) < 0.5  // 50% tolerance
+
+        if descHighs and descLows and parallel
+            det      := true
+            chResist := h_last
+            chSupp   := l_last
+
+    [det, chResist, chSupp]
+
+[chDet, chResist, chSupp] = detectBearishChannel()
+
+// ══════════════════════════════════════════════════
+// ▌ FIGURE 3 : CONSOLIDATION / RANGE HAUSSIER
+//   Swing lows ascendants + swing highs plats / légèrement ascendants
+//   → achat uniquement (breakout haussier)
+// ══════════════════════════════════════════════════
+detectBullishConso() =>
+    bool  det    = false
+    float consH  = na
+    float consL  = na
+
+    szH = array.size(arrSH)
+    szL = array.size(arrSL)
+
+    if szH >= 2 and szL >= 2
+        h_last = array.get(arrSH, szH - 1)
+        h_prev = array.get(arrSH, szH - 2)
+        l_last = array.get(arrSL, szL - 1)
+        l_prev = array.get(arrSL, szL - 2)
+
+        risingLows     = l_last > l_prev
+        flattishHighs  = (h_last - h_prev) / h_prev * 100 > -1.5  // pas de baisse > 1.5%
+
+        if risingLows and flattishHighs
+            det   := true
+            consH := math.max(h_last, h_prev)
+            consL := math.min(l_last, l_prev)
+
+    [det, consH, consL]
+
+[consDet, consH, consL] = detectBullishConso()
+
+// ══════════════════════════════════════════════════
+// ▌ FIGURE ACTIVE — priorité : SymRange > BullConso > BearChannel
+// ══════════════════════════════════════════════════
+anyFigure    = symDet or chDet or consDet
+figName      = symDet  ? "Range Symétrique" :
+               consDet ? "Consolidation Haussière" :
+               chDet   ? "Canal Baissier" : "Aucune"
+
+zoneHigh     = symDet  ? symH :
+               consDet ? consH :
+               chDet   ? chResist : na
+
+zoneLow      = symDet  ? symL :
+               consDet ? consL :
+               chDet   ? chSupp : na
+
+// ══════════════════════════════════════════════════
+// ▌ CONFIRMATIONS D'ENTRÉE
+//   [1] Figure identifiée
+//   [2] Zone de prix sur haut / bas précédent (= zoneHigh / zoneLow)
+//   [3] Cassure franche : clôture au-delà + buffer %
+//   [4] Bougie propre : corps > 50% du range de la bougie
+// ══════════════════════════════════════════════════
+bufMult  = i_breakBuffer / 100
+
+// Condition 3 : cassure franche
+bullBreak = not na(zoneHigh) and
+            close  > zoneHigh * (1 + bufMult) and
+            open   < zoneHigh  // la bougie a traversé la zone
+
+bearBreak = not na(zoneLow) and
+            close  < zoneLow  * (1 - bufMult) and
+            open   > zoneLow
+
+// Condition 4 : bougie propre (corps dominant)
+bodySize  = math.abs(close - open)
+candleRange = high - low
+cleanCandle = candleRange > 0 and bodySize / candleRange >= 0.50
+
+// Directions autorisées selon la figure
+longAllowed  = anyFigure
+shortAllowed = symDet  // short uniquement sur range symétrique
+
+// Signaux bruts (4 conditions)
+bullSignalRaw = longAllowed  and bullBreak and cleanCandle
+bearSignalRaw = shortAllowed and bearBreak and cleanCandle
+
+// ══════════════════════════════════════════════════
+// ▌ CALCUL SL / 2R / 3R
+// ══════════════════════════════════════════════════
+slDist_long  = not na(zoneLow)  ? close - zoneLow  : na
+slDist_short = not na(zoneHigh) ? zoneHigh - close : na
+
+sl_long  = not na(slDist_long)  ? close - slDist_long  : na
+sl_short = not na(slDist_short) ? close + slDist_short : na
+
+be_long  = not na(slDist_long)  ? close + slDist_long  * 2 : na  // 2R → breakeven
+be_short = not na(slDist_short) ? close - slDist_short * 2 : na
+
+tp3_long  = not na(slDist_long)  ? close + slDist_long  * i_minRR : na
+tp3_short = not na(slDist_short) ? close - slDist_short * i_minRR : na
+
+// Vérification ratio minimum
+validRR_long  = not na(slDist_long)  and slDist_long  > 0
+validRR_short = not na(slDist_short) and slDist_short > 0
+
+// ══════════════════════════════════════════════════
+// ▌ SIGNAUX FINAUX
+// ══════════════════════════════════════════════════
+longSignal  = bullSignalRaw and validRR_long  and strategy.position_size == 0
+shortSignal = bearSignalRaw and validRR_short and strategy.position_size == 0
+
+// ══════════════════════════════════════════════════
+// ▌ STATE MACHINE : entrées et gestion de position
+// ══════════════════════════════════════════════════
+var float v_entry   = na
+var float v_sl      = na
+var float v_be      = na
+var float v_tp3     = na
+var bool  v_beHit   = false
+var int   v_dir     = 0  // 1=long, -1=short
+
+if longSignal
+    v_entry  := close
+    v_sl     := sl_long
+    v_be     := be_long
+    v_tp3    := tp3_long
+    v_beHit  := false
+    v_dir    := 1
+    strategy.entry("Long", strategy.long,
+                   comment = figName + " ▲")
+
+if shortSignal
+    v_entry  := close
+    v_sl     := sl_short
+    v_be     := be_short
+    v_tp3    := tp3_short
+    v_beHit  := false
+    v_dir    := -1
+    strategy.entry("Short", strategy.short,
+                   comment = "Range Sym. ▼")
+
+// Break Even à 2R
+if i_beAt2R and strategy.position_size > 0 and not v_beHit
+    if high >= v_be
+        v_sl    := v_entry
+        v_beHit := true
+
+if i_beAt2R and strategy.position_size < 0 and not v_beHit
+    if low <= v_be
+        v_sl    := v_entry
+        v_beHit := true
+
+// Exits
+if strategy.position_size > 0
+    strategy.exit("SL/Trail Long",  "Long",  stop=v_sl,
+                  comment = v_beHit ? "BE Atteint" : "SL")
+
+if strategy.position_size < 0
+    strategy.exit("SL/Trail Short", "Short", stop=v_sl,
+                  comment = v_beHit ? "BE Atteint" : "SL")
+
+// ══════════════════════════════════════════════════
+// ▌ DÉTECTION BOUGIES DE RETOURNEMENT (mode agressif)
+//   → Alerte visuelle pour sortie manuelle
+// ══════════════════════════════════════════════════
+// Bougie englobante baissière
+bearEngulf = close < open and                          // baissière
+             close < open[1] and open > close[1] and  // englobe la précédente
+             (open - close) > (close[1] - open[1]) * 1.5  // corps important
+
+// Bougie d'indécision suivie d'une grande bougie baissière
+indecision = (math.abs(close[1] - open[1]) / (high[1] - low[1])) < 0.25
+bigBearCandle = close < open and (open - close) / (high - low) > 0.6
+
+aggressiveExit = (bearEngulf or (indecision and bigBearCandle)) and strategy.position_size > 0
+
+plotshape(aggressiveExit, "⚠ Sortie Mode Agressif", shape.xcross,
+          location.abovebar, color.orange, size=size.small)
+
+// ══════════════════════════════════════════════════
+// ▌ VISUALISATION — ZONES FIGURES
+// ══════════════════════════════════════════════════
+// Couleurs par figure
+zoneColor = symDet  ? color.new(color.blue,  80) :
+            consDet ? color.new(color.green, 85) :
+            chDet   ? color.new(color.purple,80) : na
+
+borderColor = symDet  ? color.new(color.blue,  20) :
+              consDet ? color.new(color.green, 20) :
+              chDet   ? color.new(color.purple,20) : na
+
+var box figBox = na
+
+if i_showZones and anyFigure
+    if not na(figBox)
+        box.delete(figBox)
+    figBox := box.new(
+              bar_index - math.min(i_lookback, bar_index), zoneHigh,
+              bar_index + 10, zoneLow,
+              border_color = borderColor,
+              bgcolor       = zoneColor,
+              text          = figName,
+              text_color    = color.white,
+              text_size     = size.small)
+
+// Lignes de zone (résistance + support)
+plot(anyFigure ? zoneHigh : na, "Résistance",
+     color=color.new(color.orange, 0), linewidth=2, style=plot.style_stepline)
+plot(anyFigure ? zoneLow  : na, "Support",
+     color=color.new(color.teal,   0), linewidth=2, style=plot.style_stepline)
+
+// ══════════════════════════════════════════════════
+// ▌ VISUALISATION — SL / 2R / 3R lors du signal
+// ══════════════════════════════════════════════════
+var line ln_sl  = na
+var line ln_be  = na
+var line ln_tp3 = na
+
+drawSLTP(dir, slV, beV, tpV) =>
+    if not na(ln_sl),  line.delete(ln_sl)
+    if not na(ln_be),  line.delete(ln_be)
+    if not na(ln_tp3), line.delete(ln_tp3)
+
+    ln_sl  := line.new(bar_index, slV, bar_index + 30, slV,
+                       color=color.red,    width=2, style=line.style_solid)
+    ln_be  := line.new(bar_index, beV, bar_index + 30, beV,
+                       color=color.orange, width=1, style=line.style_dashed)
+    ln_tp3 := line.new(bar_index, tpV, bar_index + 30, tpV,
+                       color=color.green,  width=2, style=line.style_solid)
+
+    if i_showLabels
+        label.new(bar_index + 1, slV,
+                  "SL " + str.tostring(slV, "#.####"),
+                  color=color.red, textcolor=color.white,
+                  style=label.style_label_right, size=size.small)
+        label.new(bar_index + 1, beV,
+                  "2R BE " + str.tostring(beV, "#.####"),
+                  color=color.orange, textcolor=color.white,
+                  style=label.style_label_right, size=size.small)
+        label.new(bar_index + 1, tpV,
+                  "3R " + str.tostring(tpV, "#.####"),
+                  color=color.green, textcolor=color.white,
+                  style=label.style_label_right, size=size.small)
+
+if i_showSLTP and longSignal
+    drawSLTP(1, sl_long, be_long, tp3_long)
+
+if i_showSLTP and shortSignal
+    drawSLTP(-1, sl_short, be_short, tp3_short)
+
+// ══════════════════════════════════════════════════
+// ▌ VISUALISATION — FLÈCHES ET LABELS DE SIGNAL
+// ══════════════════════════════════════════════════
+plotshape(longSignal,  "▲ Long",  shape.arrowup,
+          location.belowbar, color.lime, size=size.normal)
+plotshape(shortSignal, "▼ Short", shape.arrowdown,
+          location.abovebar, color.red,  size=size.normal)
+
+if i_showLabels and longSignal
+    slDist  = close - sl_long
+    riskUSD = strategy.equity * i_riskPct / 100
+    label.new(bar_index, low - candleRange,
+              "▲ LONG — " + figName +
+              "\nEntrée : " + str.tostring(close,   "#.####") +
+              "\nSL     : " + str.tostring(sl_long, "#.####") +
+              "\n2R BE  : " + str.tostring(be_long, "#.####") +
+              "\n3R Min : " + str.tostring(tp3_long,"#.####") +
+              "\nRisque : " + str.tostring(riskUSD, "#.##") + " $",
+              color=color.new(color.green, 5),
+              textcolor=color.white,
+              style=label.style_label_up,
+              size=size.small)
+
+if i_showLabels and shortSignal
+    label.new(bar_index, high + candleRange,
+              "▼ SHORT — Range Sym." +
+              "\nEntrée : " + str.tostring(close,    "#.####") +
+              "\nSL     : " + str.tostring(sl_short, "#.####") +
+              "\n2R BE  : " + str.tostring(be_short, "#.####") +
+              "\n3R Min : " + str.tostring(tp3_short,"#.####"),
+              color=color.new(color.red, 5),
+              textcolor=color.white,
+              style=label.style_label_down,
+              size=size.small)
+
+// Ligne de break even active (position ouverte)
+plot(strategy.position_size != 0 ? v_sl  : na, "SL Actif",
+     color=color.red,    linewidth=2, style=plot.style_linebr)
+plot(strategy.position_size != 0 ? v_be  : na, "2R Actif",
+     color=color.orange, linewidth=1, style=plot.style_linebr)
+plot(strategy.position_size != 0 ? v_tp3 : na, "3R Actif",
+     color=color.green,  linewidth=2, style=plot.style_linebr)
+
+// ══════════════════════════════════════════════════
+// ▌ TABLEAU DE BORD (top-right)
+// ══════════════════════════════════════════════════
+var table dash = table.new(position.top_right, 2, 12,
+                            bgcolor    = color.new(color.black, 65),
+                            border_width = 1,
+                            border_color = color.new(color.gray, 60))
+
+COL_LABEL = color.new(color.gray,  0)
+COL_VAL   = color.new(color.white, 0)
+COL_GREEN = color.new(color.lime,  0)
+COL_RED   = color.new(color.red,   0)
+COL_YEL   = color.new(color.yellow,0)
+HDR_BG    = color.new(color.navy,  40)
+
+if i_showDash and barstate.islast
+    // En-tête
+    table.cell(dash, 0, 0,  "BREAKOUT CONSO",   text_color=COL_YEL,   bgcolor=HDR_BG, text_size=size.small)
+    table.cell(dash, 1, 0,  "CRYPTO FUTURES",   text_color=COL_YEL,   bgcolor=HDR_BG, text_size=size.small)
+
+    // Figure
+    table.cell(dash, 0, 1, "Figure",            text_color=COL_LABEL, text_size=size.small)
+    table.cell(dash, 1, 1, figName,
+               text_color=anyFigure ? COL_GREEN : COL_RED,            text_size=size.small)
+
+    // Résistance / Support
+    table.cell(dash, 0, 2, "Résistance",        text_color=COL_LABEL, text_size=size.small)
+    table.cell(dash, 1, 2, not na(zoneHigh) ? str.tostring(zoneHigh,"#.####") : "—",
+               text_color=COL_YEL,                                    text_size=size.small)
+
+    table.cell(dash, 0, 3, "Support",           text_color=COL_LABEL, text_size=size.small)
+    table.cell(dash, 1, 3, not na(zoneLow)  ? str.tostring(zoneLow, "#.####") : "—",
+               text_color=COL_YEL,                                    text_size=size.small)
+
+    // Conditions
+    table.cell(dash, 0, 4, "① Figure",          text_color=COL_LABEL, text_size=size.small)
+    table.cell(dash, 1, 4, anyFigure ? "✓" : "✗",
+               text_color=anyFigure ? COL_GREEN : COL_RED,            text_size=size.small)
+
+    table.cell(dash, 0, 5, "② Zone Prix",       text_color=COL_LABEL, text_size=size.small)
+    table.cell(dash, 1, 5, not na(zoneHigh) ? "✓" : "✗",
+               text_color=not na(zoneHigh) ? COL_GREEN : COL_RED,    text_size=size.small)
+
+    table.cell(dash, 0, 6, "③ Cassure",         text_color=COL_LABEL, text_size=size.small)
+    breakOK = bullBreak or bearBreak
+    table.cell(dash, 1, 6, breakOK ? "✓" : "✗",
+               text_color=breakOK ? COL_GREEN : COL_RED,              text_size=size.small)
+
+    table.cell(dash, 0, 7, "④ Bougie Propre",   text_color=COL_LABEL, text_size=size.small)
+    table.cell(dash, 1, 7, cleanCandle ? "✓" : "✗",
+               text_color=cleanCandle ? COL_GREEN : COL_RED,          text_size=size.small)
+
+    // Risk MM
+    table.cell(dash, 0, 8, "Risque/Trade",      text_color=COL_LABEL, text_size=size.small)
+    table.cell(dash, 1, 8, str.tostring(i_riskPct,"#.#") + "%",
+               text_color=COL_VAL,                                    text_size=size.small)
+
+    table.cell(dash, 0, 9, "R:R Min / Levier",  text_color=COL_LABEL, text_size=size.small)
+    table.cell(dash, 1, 9, "1:" + str.tostring(i_minRR,"#.#") + " / " + str.tostring(i_leverage) + "x",
+               text_color=COL_VAL,                                    text_size=size.small)
+
+    table.cell(dash, 0, 10, "Break Even",       text_color=COL_LABEL, text_size=size.small)
+    table.cell(dash, 1, 10, i_beAt2R ? "@ 2R ✓" : "OFF",
+               text_color=i_beAt2R ? COL_GREEN : COL_RED,             text_size=size.small)
+
+    // Position
+    posText  = strategy.position_size > 0 ? "LONG ▲" :
+               strategy.position_size < 0 ? "SHORT ▼" : "—"
+    posColor = strategy.position_size > 0 ? COL_GREEN :
+               strategy.position_size < 0 ? COL_RED : COL_LABEL
+    table.cell(dash, 0, 11, "Position",          text_color=COL_LABEL, text_size=size.small)
+    table.cell(dash, 1, 11, posText,             text_color=posColor,  text_size=size.small)
+
+// ══════════════════════════════════════════════════
+// ▌ ALERTES (à configurer dans TradingView)
+// ══════════════════════════════════════════════════
+alertcondition(longSignal,
+               title   = "🚀 LONG Signal",
+               message = "{{ticker}} — LONG BREAKOUT — Figure : {{strategy.order.comment}}\nEntrée : {{close}}")
+
+alertcondition(shortSignal,
+               title   = "🔻 SHORT Signal",
+               message = "{{ticker}} — SHORT BREAKOUT — Range Symétrique\nEntrée : {{close}}")
+
+alertcondition(aggressiveExit,
+               title   = "⚠ Sortie Agressive",
+               message = "{{ticker}} — Bougie de retournement détectée — Mode Agressif : sortir manuellement")
+
+alertcondition(v_beHit and not v_beHit[1],
+               title   = "✅ Break Even Activé",
+               message = "{{ticker}} — Break Even déclenché à 2R — SL déplacé à l'entrée")
